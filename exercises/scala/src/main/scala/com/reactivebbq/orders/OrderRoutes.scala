@@ -6,6 +6,7 @@ import akka.actor.ActorRef
 import akka.http.scaladsl.model.{HttpResponse, StatusCodes}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.{ExceptionHandler, Route}
+import akka.pattern.ask
 import akka.util.Timeout
 
 import scala.concurrent.ExecutionContext
@@ -17,6 +18,10 @@ class OrderRoutes(orderActors: ActorRef)(implicit ec: ExecutionContext)
   private implicit val timeout: Timeout = Timeout(5.seconds)
 
   private def exceptionHandler: ExceptionHandler = ExceptionHandler {
+
+    case ex: OrderActor.OrderNotFoundException =>
+      complete(HttpResponse(StatusCodes.NotFound, entity = ex.getMessage))
+
     case ex =>
       complete(HttpResponse(StatusCodes.InternalServerError, entity = ex.getMessage))
   }
@@ -27,7 +32,11 @@ class OrderRoutes(orderActors: ActorRef)(implicit ec: ExecutionContext)
         post {
           entity(as[OrderActor.OpenOrder]) { openOrder =>
             complete {
-              ???
+              val orderId = OrderId()
+
+              (orderActors ? OrderActor.Envelope(orderId, openOrder))
+                .mapTo[OrderActor.OrderOpened]
+                .map(_.order)
             }
           }
         } ~
@@ -37,14 +46,18 @@ class OrderRoutes(orderActors: ActorRef)(implicit ec: ExecutionContext)
 
           get {
             complete {
-              ???
+              (orderActors ? OrderActor.Envelope(orderId, OrderActor.GetOrder()))
+                .mapTo[Order]
             }
           } ~
           path("items") {
             post {
               entity(as[OrderActor.AddItemToOrder]) { addItemToOrder =>
                 complete {
-                  ???
+
+                  (orderActors ? OrderActor.Envelope(orderId, addItemToOrder))
+                    .mapTo[OrderActor.ItemAddedToOrder]
+                    .map(_.order)
                 }
               }
             }
