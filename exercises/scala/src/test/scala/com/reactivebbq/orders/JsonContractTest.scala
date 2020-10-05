@@ -1,13 +1,28 @@
 package com.reactivebbq.orders
 
+import akka.actor.{Actor, Props}
 import akka.http.scaladsl.model.ContentTypes
 import akka.http.scaladsl.testkit.ScalatestRouteTest
 import org.scalatest.WordSpec
 import spray.json.JsonParser
 
 class JsonContractTest extends WordSpec with ScalatestRouteTest with OrderHelpers {
+  class OrderSupervisor(repository: OrderRepository) extends Actor {
+    private def createOrderActor(orderId: OrderId) = {
+      context.actorOf(OrderActor.props(repository), orderId.value.toString)
+    }
+
+    override def receive = {
+      case OrderActor.Envelope(recipient, message) =>
+        context
+          .child(recipient.value.toString)
+          .getOrElse(createOrderActor(recipient))
+          .forward(message)
+    }
+  }
+
   val orderRepo = new InMemoryOrderRepository()
-  val orderActors = system.actorOf(OrderActor.props(orderRepo))
+  val orderActors = system.actorOf(Props(new OrderSupervisor(orderRepo)))
   val orderRoutes = new OrderRoutes(orderActors)(system.dispatcher)
 
   "Creating an Order" should {
