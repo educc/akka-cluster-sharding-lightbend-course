@@ -84,6 +84,35 @@ class OrderActorTest extends WordSpec with AkkaSpec with OrderHelpers {
     }
   }
 
+  "The Actor" should {
+    "Load it's state from the repository when created." in new TestContext {
+      val order = generateOrder()
+      repo.update(order).futureValue
+
+      val actor = parent
+        .childActorOf(
+          OrderActor.props(repo),
+          order.id.value.toString)
+
+      sender.send(actor, GetOrder())
+      sender.expectMsg(order)
+    }
+    "Terminate when it fails to load from the repo" in new TestContext {
+      val order = generateOrder()
+
+      val mockRepo = new MockRepo()
+      mockRepo.mockFind(_ => Future.failed(new Exception("Repo Failed")))
+
+      val actor = parent
+        .childActorOf(
+          OrderActor.props(mockRepo),
+          order.id.value.toString)
+
+      parent.watch(actor)
+      parent.expectTerminated(actor)
+    }
+  }
+
   "OpenOrder" should {
     "initialize the Order" in new TestContext {
       val server = generateServer()
@@ -107,15 +136,35 @@ class OrderActorTest extends WordSpec with AkkaSpec with OrderHelpers {
       sender.send(orderActor, OpenOrder(server, table))
       sender.expectMsg(Status.Failure(DuplicateOrderException(orderId)))
     }
-    "return the repository failure if the repository fails" in new TestContext() {
+    "return the repository failure if the repository fails and fail" in new TestContext() {
       val server = generateServer()
       val table = generateTable()
+
+      parent.watch(orderActor)
 
       val expectedException = new RuntimeException("Repository Failure")
       repo.mockUpdate(_ => Future.failed(expectedException))
 
       sender.send(orderActor, OpenOrder(server, table))
       val result = sender.expectMsg(Status.Failure(expectedException))
+
+      parent.expectTerminated(orderActor)
+    }
+    "not allow further interactions while it's in progress" in new TestContext() {
+      val order = generateOrder(orderId = orderId, items = Seq.empty)
+
+      repo.mockUpdate {
+        order => Future {
+          Thread.sleep(50)
+          order
+        }
+      }
+
+      sender.send(orderActor, OpenOrder(order.server, order.table))
+      sender.send(orderActor, OpenOrder(order.server, order.table))
+
+      sender.expectMsg(OrderOpened(order))
+      sender.expectMsg(Status.Failure(DuplicateOrderException(orderId)))
     }
   }
 
@@ -149,8 +198,10 @@ class OrderActorTest extends WordSpec with AkkaSpec with OrderHelpers {
           updated
       }
     }
-    "return the repository failure if the repository fails" in new TestContext() {
+    "return the repository failure if the repository fails and fail" in new TestContext() {
       val order = openOrder()
+
+      parent.watch(orderActor)
 
       val item = generateOrderItem()
 
@@ -159,6 +210,30 @@ class OrderActorTest extends WordSpec with AkkaSpec with OrderHelpers {
 
       sender.send(orderActor, AddItemToOrder(item))
       sender.expectMsg(Status.Failure(expectedException))
+
+      parent.expectTerminated(orderActor)
+    }
+    "not allow further interactions while it's in progress" in new TestContext() {
+      val order = openOrder()
+
+      val item1 = generateOrderItem()
+      val updated1 = order.withItem(item1)
+
+      val item2 = generateOrderItem()
+      val updated2 = updated1.withItem(item2)
+
+      repo.mockUpdate {
+        order => Future {
+          Thread.sleep(50)
+          order
+        }
+      }
+
+      sender.send(orderActor, AddItemToOrder(item1))
+      sender.send(orderActor, AddItemToOrder(item2))
+
+      sender.expectMsg(ItemAddedToOrder(updated1))
+      sender.expectMsg(ItemAddedToOrder(updated2))
     }
   }
 
