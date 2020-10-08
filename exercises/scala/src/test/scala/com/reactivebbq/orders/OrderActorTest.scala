@@ -1,6 +1,7 @@
 package com.reactivebbq.orders
 
 import akka.actor.Status
+import akka.cluster.sharding.ShardRegion
 import akka.testkit.TestProbe
 import com.reactivebbq.orders.OrderActor._
 import org.scalatest.WordSpec
@@ -77,9 +78,12 @@ class OrderActorTest extends WordSpec with AkkaSpec with OrderHelpers {
       val orderId = generateOrderId()
       val message = GetOrder()
       val envelope = Envelope(orderId, message)
+      val startEntity = ShardRegion.StartEntity(orderId.value.toString)
 
       val envelopeShard = shardIdExtractor(envelope)
+      val startEntityShard = shardIdExtractor(startEntity)
 
+      assert(envelopeShard === startEntityShard)
       assert(envelopeShard === Math.abs(orderId.value.toString.hashCode % 30).toString)
     }
   }
